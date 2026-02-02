@@ -14,7 +14,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from ai.main import generateImageCaption, generateImageSummary
+from ai.main import generateImageCaption, generateImageSummary, generatTableSummary
 
 
 # Types that start a new narrative merge
@@ -127,7 +127,11 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
     total_images = sum(
         1 for sec in sections for el in sec["elements"] if el.get("type") == "Image"
     )
+    total_tables = sum(
+        1 for sec in sections for el in sec["elements"] if el.get("type") == "Table"
+    )
     image_counter = 0
+    table_counter = 0
     result_sections = []
 
     for sec in sections:
@@ -184,6 +188,16 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                 summary = (el["text"] or "")[:500]
                 if len(el.get("text") or "") > 500:
                     summary = summary.rstrip() + "…"
+                if raw_html:
+                    table_counter += 1
+                    print(
+                        f"Generating summary for table {table_counter}/{total_tables}",
+                        file=sys.stderr,
+                    )
+                    try:
+                        summary = asyncio.run(generatTableSummary([raw_html]))
+                    except Exception:
+                        pass  # keep fallback summary
                 blocks.append({
                     "block_type": "table",
                     "element_id": el["element_id"],
@@ -251,6 +265,30 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
     return result_sections
 
 
+def build_section_snippet(sec: dict, max_chars: int = 400) -> str:
+    parts = [sec["title"] or ""]
+    for blk in sec.get("blocks", [])[:10]: 
+        bt = blk.get("block_type", "")
+        if bt == "narrative" or bt == "list":
+            text = (blk.get("text") or "").strip()
+            if text:
+                parts.append(text[:max_chars] + ("…" if len(text) > max_chars else ""))
+        elif bt == "table":
+            summary = (blk.get("summary") or blk.get("text") or "").strip()
+            if summary:
+                parts.append(summary[:300] + ("…" if len(summary) > 300 else ""))
+        elif bt == "image":
+            cap = (blk.get("caption") or blk.get("description") or "").strip()
+            if cap:
+                parts.append(cap[:200] + ("…" if len(cap) > 200 else ""))
+    return "\n".join(p for p in parts if p).strip()[:800]  # cap total snippet
+
+
+def add_section_snippets(sections: list[dict]) -> None:
+    for sec in sections:
+        sec["section_snippet"] = build_section_snippet(sec)
+
+
 def run(json_path: str) -> dict:
     """Load JSON, normalize, build outline and logical blocks; return result."""
     path = Path(json_path)
@@ -277,6 +315,7 @@ def run(json_path: str) -> dict:
     outline = build_outline(normalized)
     raw_by_id = {el.get("element_id"): el for el in raw_elements if el.get("element_id")}
     sections_with_blocks = build_logical_blocks(outline, raw_by_id)
+    add_section_snippets(sections_with_blocks)
     print(f"No of sections: {len(sections_with_blocks)}")
 
     return {

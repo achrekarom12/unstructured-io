@@ -18,7 +18,7 @@ def _normalize_input(input: str | list[str] | list[dict]) -> list:
         return [{"role": "user", "content": [{"type": "input_text", "text": s} for s in input]}]
     return input
 
-async def generateText(instructions: str, input: str | list[str] | list[dict], model: str = "gpt-5-nano") -> str:
+async def asyncGenerateText(instructions: str, input: str | list[str] | list[dict], model: str = "gpt-5-nano") -> str:
     normalized_input = _normalize_input(input)
     response = client.responses.create(
         model=model,
@@ -28,14 +28,14 @@ async def generateText(instructions: str, input: str | list[str] | list[dict], m
     return response.output_text
 
 async def generatTableSummary(input: list[str]) -> str:
-    return await generateText(
+    return await asyncGenerateText(
         instructions="You are tasked with generating a detailed summary for the given table which is in raw HTML format. The summary should be given to the LLM so it should be detailed and understandable.",
         input=input
     )
 
 async def generateImageSummary(b64_image: str) -> str:
     instruction = "You are tasked with generating an image description."
-    return await generateText(
+    return await asyncGenerateText(
         instructions=instruction,
         input=[
             {
@@ -50,7 +50,7 @@ async def generateImageSummary(b64_image: str) -> str:
 
 async def generateImageCaption(b64_image: str) -> str:
     instruction = "You are tasked with generating a single line image caption."
-    return await generateText(
+    return await asyncGenerateText(
         instructions=instruction,
         input=[
             {
