@@ -1,4 +1,7 @@
-import json, os, time
+import argparse
+import json
+import os
+import time
 from typing import Optional
 from dotenv import load_dotenv
 from unstructured_client import UnstructuredClient
@@ -11,7 +14,7 @@ load_dotenv()
 
 def run_on_demand_job(
         client: UnstructuredClient,
-        input_dir: str,
+        input_file: str,
         job_template_id: Optional[str] = None, 
         job_nodes: Optional[list[dict[str, object]]] = None
 ) -> tuple[str, list[dict[str, str]]]:
@@ -19,37 +22,33 @@ def run_on_demand_job(
 
     Arguments:
     - client {UnstructuredClient}: The initialized Unstructured API client to use.
-    - input_dir {str}: The directory that contains the input files.
+    - input_file {str}: Path to the input file to process.
     - job_template_id: {Optional[str]}: If this job is to use a workflow template, the ID of the workflow template to use.
     - job_nodes {Optional[list[dict[str, object]]]}: If this job is to use a custom workflow definition, the list of custom workflow nodes to use.
 
     Raises:
     - ValueError: If neither the job template ID nor job nodes (and not both) are specified.
+    - ValueError: If the input file does not exist or is not a file.
         
     Returns:
     - job_id {str}: The ID of the on-demand job.
     - job_input_file_ids {list[str]}: The input file IDs of the on-demand job.
     - job_output_node_files {list[dict[str, str]]}: The output node files of the on-demand job.
     """
+    if not os.path.isfile(input_file):
+        raise ValueError(f"Input path is not a file or does not exist: {input_file}")
+
     request_data = {}
-    files = []
-
-    for filename in os.listdir(input_dir):
-        full_path = os.path.join(input_dir, filename)
-
-        # Skip non-files (for example, directories).
-        if not os.path.isfile(full_path):
-            continue
-
-        files.append(
-            (
-                InputFiles(
-                    content=open(full_path, "rb"),
-                    file_name=filename,
-                    content_type="application/pdf"
-                )
+    filename = os.path.basename(input_file)
+    files = [
+        (
+            InputFiles(
+                content=open(input_file, "rb"),
+                file_name=filename,
+                content_type="application/pdf"
             )
         )
+    ]
 
     if job_template_id is not None:
         request_data = json.dumps({"template_id": job_template_id})
@@ -146,6 +145,8 @@ def download_job_output(
             )
         )
 
+        # print(response.any) will give final JSON 
+
         output_path = os.path.join(output_dir, f"{job_input_file_id}.json")
         print(f"Output path: {output_path}")
 
@@ -156,10 +157,23 @@ def download_job_output(
 
 
 def main():
-    # API key and source/destination folder paths.
+    parser = argparse.ArgumentParser(description="Run an Unstructured on-demand job on a single file.")
+    parser.add_argument(
+        "--file",
+        required=True,
+        help="Path to the input file to process (e.g. --file=./input/document.pdf)",
+    )
+    parser.add_argument(
+        "--output",
+        default="./output",
+        help="Directory to save the job output (default: ./output)",
+    )
+    args = parser.parse_args()
+
+    # API key and paths.
     UNSTRUCTURED_API_KEY = os.environ.get('UNSTRUCTURED_API_KEY')
-    INPUT_FOLDER_PATH = "./input"
-    OUTPUT_FOLDER_PATH = "./output"
+    INPUT_FILE_PATH = os.path.abspath(args.file)
+    OUTPUT_FOLDER_PATH = args.output
 
     # On-demand job settings.
     job_template_id = "hi_res_and_enrichment"
@@ -172,11 +186,11 @@ def main():
 
     with UnstructuredClient(api_key_auth=UNSTRUCTURED_API_KEY) as client:
         print("-" * 80)
-        print(f"Attempting to run the on-demand job, ingesting the input files from '{INPUT_FOLDER_PATH}'...")
+        print(f"Attempting to run the on-demand job on input file '{INPUT_FILE_PATH}'...")
         job_id, job_input_file_ids, job_output_node_files = run_on_demand_job(
-            client = client,
-            input_dir = INPUT_FOLDER_PATH,
-            job_template_id = job_template_id
+            client=client,
+            input_file=INPUT_FILE_PATH,
+            job_template_id=job_template_id
         )
 
         print(f"Job ID: {job_id}\n")
@@ -203,6 +217,7 @@ def main():
 
         print("-" * 80)
         print("Attempting to download the job output...")
+        os.makedirs(OUTPUT_FOLDER_PATH, exist_ok=True)
         download_job_output(client, job_id, job_input_file_ids, OUTPUT_FOLDER_PATH)
         
         print("-" * 80)
