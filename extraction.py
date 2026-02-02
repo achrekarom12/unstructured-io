@@ -7,10 +7,14 @@ Extraction script: loads a JSON file of unstructured elements, then:
 """
 
 import argparse
+import asyncio
 import json
 import secrets
 import sys
+from collections import Counter
 from pathlib import Path
+
+from ai.main import generateImageCaption, generateImageSummary
 
 
 # Types that start a new narrative merge
@@ -120,6 +124,10 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
     - Tables: atomic with raw HTML and summary
     - Images: metadata, base64, description, caption
     """
+    total_images = sum(
+        1 for sec in sections for el in sec["elements"] if el.get("type") == "Image"
+    )
+    image_counter = 0
     result_sections = []
 
     for sec in sections:
@@ -192,6 +200,18 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                 base64_data = meta.get('image_base64')
                 caption = el.get("text")
                 description = caption or "(image)"
+                if base64_data:
+                    image_counter += 1
+                    print(
+                        f"Generating Summary & Caption for image {image_counter}/{total_images}",
+                        file=sys.stderr,
+                    )
+                    b64_payload = base64_data.split(",", 1)[-1] if "," in base64_data else base64_data
+                    try:
+                        description = asyncio.run(generateImageSummary(b64_payload))
+                        caption = asyncio.run(generateImageCaption(b64_payload))
+                    except Exception:
+                        pass  # keep fallback description/caption
                 blocks.append({
                     "block_type": "image",
                     "element_id": el["element_id"],
@@ -250,10 +270,14 @@ def run(json_path: str) -> dict:
     file_id, file_name = resolve_file_identifiers(raw_elements, json_path)
     normalized = normalize_elements(raw_elements, file_id, file_name)
     print(f"No of normalized elements: {len(normalized)}")
+    type_counts = Counter(el["type"] for el in normalized)
+    print("Elements per type:")
+    for etype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+        print(f"  {etype}: {count}")
     outline = build_outline(normalized)
     raw_by_id = {el.get("element_id"): el for el in raw_elements if el.get("element_id")}
     sections_with_blocks = build_logical_blocks(outline, raw_by_id)
-    print(f"No of normalized sections: {len(sections_with_blocks)}")
+    print(f"No of sections: {len(sections_with_blocks)}")
 
     return {
         "file_id": file_id,

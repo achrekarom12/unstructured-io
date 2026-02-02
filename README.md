@@ -49,3 +49,8 @@
         - Link table summaries with table in raw HTML
     - Images:
         - Images are referenced entities
+
+
+Root -> File
+Nodes -> Sections
+Leaves -> Blocks
