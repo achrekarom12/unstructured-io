@@ -226,13 +226,13 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    from retrieval import retrieve_and_answer
+    main()
+    # from retrieval import retrieve_and_answer
 
-    result = retrieve_and_answer(
-        "output/processed/Paytm_Financial_Results_Q2_FY2024-62664f01.pdf_extraction.json",
-        "What was the standalone total expense and loss before tax at the year end?",
-        max_sections=5,
-    )
-    print(result["answer"])
-    print(result["reasoning"])
+    # result = retrieve_and_answer(
+    #     "output/processed/Paytm_Financial_Results_Q2_FY2024-62664f01.pdf_extraction.json",
+    #     "What was the standalone total expense and loss before tax at the year end?",
+    #     max_sections=5,
+    # )
+    # print(result["answer"])
+    # print(result["reasoning"])

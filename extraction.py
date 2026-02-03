@@ -33,6 +33,19 @@ def points_to_bbox(points):
     return {"x1": min(xs), "y1": min(ys), "x2": max(xs), "y2": max(ys)}
 
 
+def union_bbox(bboxes: list) -> dict | None:
+    """Return a single bbox that spans all given bboxes, or None if none valid."""
+    valid = [b for b in bboxes if b and isinstance(b, dict)]
+    if not valid:
+        return None
+    return {
+        "x1": min(b["x1"] for b in valid),
+        "y1": min(b["y1"] for b in valid),
+        "x2": max(b["x2"] for b in valid),
+        "y2": max(b["y2"] for b in valid),
+    }
+
+
 def normalize_element(raw: dict, sequence: int, file_id: str, file_name: str) -> dict:
     """Map one raw element to canonical schema."""
     meta = raw.get("metadata") or {}
@@ -148,16 +161,19 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
             if t == "NarrativeText":
                 merged_texts = [el["text"]]
                 merged_ids = [el["element_id"]]
+                merged_bboxes = [el.get("bbox")]
                 j = i + 1
                 while j < len(elements) and elements[j]["type"] == "NarrativeText":
                     merged_texts.append(elements[j]["text"])
                     merged_ids.append(elements[j]["element_id"])
+                    merged_bboxes.append(elements[j].get("bbox"))
                     j += 1
                 blocks.append({
                     "block_type": "narrative",
                     "element_ids": merged_ids,
                     "text": "\n\n".join(merged_texts),
                     "merged_count": len(merged_ids),
+                    "bbox": union_bbox(merged_bboxes),
                     "section_id": section_id,
                     "section_title": section_title,
                 })
@@ -166,16 +182,19 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
             elif t == "ListItem":
                 merged_texts = [el["text"]]
                 merged_ids = [el["element_id"]]
+                merged_bboxes = [el.get("bbox")]
                 j = i + 1
                 while j < len(elements) and elements[j]["type"] == "ListItem":
                     merged_texts.append(elements[j]["text"])
                     merged_ids.append(elements[j]["element_id"])
+                    merged_bboxes.append(elements[j].get("bbox"))
                     j += 1
                 blocks.append({
                     "block_type": "list",
                     "element_ids": merged_ids,
                     "text": "\n".join(merged_texts),
                     "merged_count": len(merged_ids),
+                    "bbox": union_bbox(merged_bboxes),
                     "section_id": section_id,
                     "section_title": section_title,
                 })
@@ -203,6 +222,7 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                     "element_id": el["element_id"],
                     "raw_html": raw_html,
                     "summary": summary,
+                    "bbox": el.get("bbox"),
                     "section_id": section_id,
                     "section_title": section_title,
                 })
@@ -242,6 +262,7 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                     "block_type": "Title",
                     "element_id": el["element_id"],
                     "text": el.get("text", ""),
+                    "bbox": el.get("bbox"),
                     "section_id": section_id,
                     "section_title": section_title,
                 })
@@ -251,6 +272,7 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                     "block_type": "other",
                     "element_id": el["element_id"],
                     "text": el.get("text", ""),
+                    "bbox": el.get("bbox"),
                     "section_id": section_id,
                     "section_title": section_title,
                 })
