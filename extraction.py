@@ -129,6 +129,62 @@ def build_outline(normalized: list[dict]) -> list[dict]:
     return sections
 
 
+async def _run_all_summaries_async(
+    table_work: list[tuple[str, str]],
+    image_work: list[tuple[str, str]],
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """
+    Run all table summaries and image summary+caption in parallel.
+    Returns (table_results by element_id, image_results by element_id with 'description' and 'caption').
+    Failed tasks are omitted from the result dicts so blocks keep their fallbacks.
+    """
+
+    async def table_summary_safe(eid: str, html: str) -> tuple[str, str] | None:
+        try:
+            summary = await generatTableSummary([html])
+            return (eid, summary)
+        except Exception:
+            return None
+
+    async def image_summary_caption_safe(eid: str, b64: str) -> tuple[str, dict] | None:
+        try:
+            description, caption = await asyncio.gather(
+                generateImageSummary(b64),
+                generateImageCaption(b64),
+            )
+            return (eid, {"description": description, "caption": caption})
+        except Exception:
+            return None
+
+    async def run_tables() -> dict[str, str]:
+        if not table_work:
+            return {}
+        print(f"[extraction] Async batch: running {len(table_work)} table summaries...", file=sys.stderr)
+        results = await asyncio.gather(
+            *[table_summary_safe(eid, html) for eid, html in table_work],
+            return_exceptions=False,
+        )
+        return {r[0]: r[1] for r in results if r is not None}
+
+    async def run_images() -> dict[str, dict]:
+        if not image_work:
+            return {}
+        print(f"[extraction] Async batch: running {len(image_work)} image summary+caption tasks...", file=sys.stderr)
+        results = await asyncio.gather(
+            *[image_summary_caption_safe(eid, b64) for eid, b64 in image_work],
+            return_exceptions=False,
+        )
+        return {r[0]: r[1] for r in results if r is not None}
+
+    print("[extraction] Async batch: starting table and image tasks in parallel...", file=sys.stderr)
+    table_results, image_results = await asyncio.gather(run_tables(), run_images())
+    print(
+        f"[extraction] Async batch done: {len(table_results)} table results, {len(image_results)} image results",
+        file=sys.stderr,
+    )
+    return table_results, image_results
+
+
 def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[dict]:
     """
     Build logical blocks per section:
@@ -136,17 +192,17 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
     - Merge adjacent ListItem
     - Tables: atomic with raw HTML and summary
     - Images: metadata, base64, description, caption
+
+    Phase 1: Build blocks with fallbacks and collect table_work / image_work.
+    Phase 2: Run all summaries and captions in one async batch.
+    Phase 3: Apply results into blocks.
     """
-    total_images = sum(
-        1 for sec in sections for el in sec["elements"] if el.get("type") == "Image"
-    )
-    total_tables = sum(
-        1 for sec in sections for el in sec["elements"] if el.get("type") == "Table"
-    )
-    image_counter = 0
-    table_counter = 0
+    table_work: list[tuple[str, str]] = []
+    image_work: list[tuple[str, str]] = []
     result_sections = []
 
+    # Phase 1: build blocks and collect work
+    print("[extraction] Phase 1: building blocks and collecting table/image work...", file=sys.stderr)
     for sec in sections:
         blocks = []
         elements = sec["elements"]
@@ -208,15 +264,7 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                 if len(el.get("text") or "") > 500:
                     summary = summary.rstrip() + "…"
                 if raw_html:
-                    table_counter += 1
-                    print(
-                        f"Generating summary for table {table_counter}/{total_tables}",
-                        file=sys.stderr,
-                    )
-                    try:
-                        summary = asyncio.run(generatTableSummary([raw_html]))
-                    except Exception:
-                        pass  # keep fallback summary
+                    table_work.append((el["element_id"], raw_html))
                 blocks.append({
                     "block_type": "table",
                     "element_id": el["element_id"],
@@ -235,17 +283,8 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
                 caption = el.get("text")
                 description = caption or "(image)"
                 if base64_data:
-                    image_counter += 1
-                    print(
-                        f"Generating Summary & Caption for image {image_counter}/{total_images}",
-                        file=sys.stderr,
-                    )
                     b64_payload = base64_data.split(",", 1)[-1] if "," in base64_data else base64_data
-                    try:
-                        description = asyncio.run(generateImageSummary(b64_payload))
-                        caption = asyncio.run(generateImageCaption(b64_payload))
-                    except Exception:
-                        pass  # keep fallback description/caption
+                    image_work.append((el["element_id"], b64_payload))
                 blocks.append({
                     "block_type": "image",
                     "element_id": el["element_id"],
@@ -284,6 +323,39 @@ def build_logical_blocks(sections: list[dict], raw_by_element_id: dict) -> list[
             "blocks": blocks,
         })
 
+    print(
+        f"[extraction] Phase 1 done: {len(result_sections)} sections, "
+        f"{len(table_work)} tables and {len(image_work)} images to process",
+        file=sys.stderr,
+    )
+
+    # Phase 2: run all summaries and captions in one async batch
+    if table_work or image_work:
+        print("[extraction] Phase 2: running async batch (table + image summaries)...", file=sys.stderr)
+        table_results, image_results = asyncio.run(
+            _run_all_summaries_async(table_work, image_work)
+        )
+        print(
+            f"Generated {len(table_results)} table summaries and {len(image_results)} image captions",
+            file=sys.stderr,
+        )
+        print("[extraction] Phase 2 done", file=sys.stderr)
+    else:
+        table_results, image_results = {}, {}
+
+    # Phase 3: apply results into blocks
+    print("[extraction] Phase 3: applying results into blocks...", file=sys.stderr)
+    for sec in result_sections:
+        for blk in sec["blocks"]:
+            bt = blk.get("block_type")
+            eid = blk.get("element_id")
+            if bt == "table" and eid in table_results:
+                blk["summary"] = table_results[eid]
+            elif bt == "image" and eid in image_results:
+                blk["description"] = image_results[eid]["description"]
+                blk["caption"] = image_results[eid]["caption"]
+
+    print("[extraction] Phase 3 done", file=sys.stderr)
     return result_sections
 
 
@@ -317,26 +389,38 @@ def run(json_path: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"JSON file not found: {json_path}")
 
+    print("[extraction] Loading JSON...", file=sys.stderr)
     with open(path, "r", encoding="utf-8") as f:
         data = f.read().strip()
     raw_elements = json.loads(data)
     if not isinstance(raw_elements, list):
         raw_elements = [raw_elements]
+    print(f"[extraction] Loaded {len(raw_elements)} raw elements", file=sys.stderr)
 
     print(f"No of raw elements: {len(raw_elements)}")
     raw_elements = [el for el in raw_elements if el.get("type") not in OMIT_TYPES]
     print(f"No of raw elements after removing headers and footers: {len(raw_elements)}")
 
+    print("[extraction] Resolving file identifiers and normalizing elements...", file=sys.stderr)
     file_id, file_name = resolve_file_identifiers(raw_elements, json_path)
     normalized = normalize_elements(raw_elements, file_id, file_name)
+    print(f"[extraction] Normalized {len(normalized)} elements", file=sys.stderr)
     print(f"No of normalized elements: {len(normalized)}")
     type_counts = Counter(el["type"] for el in normalized)
     print("Elements per type:")
     for etype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
         print(f"  {etype}: {count}")
+
+    print("[extraction] Building outline (grouping by Title)...", file=sys.stderr)
     outline = build_outline(normalized)
+    print(f"[extraction] Outline: {len(outline)} sections", file=sys.stderr)
+
     raw_by_id = {el.get("element_id"): el for el in raw_elements if el.get("element_id")}
+    print("[extraction] Building logical blocks (Phase 1–3)...", file=sys.stderr)
     sections_with_blocks = build_logical_blocks(outline, raw_by_id)
+    print(f"[extraction] Logical blocks built: {len(sections_with_blocks)} sections", file=sys.stderr)
+
+    print("[extraction] Adding section snippets...", file=sys.stderr)
     add_section_snippets(sections_with_blocks)
     print(f"No of sections: {len(sections_with_blocks)}")
 
