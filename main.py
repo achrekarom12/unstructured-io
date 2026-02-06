@@ -12,148 +12,116 @@ from unstructured_client.models.shared import BodyCreateJob, InputFiles, JobInfo
 load_dotenv()
 
 
-def run_on_demand_job(
-        client: UnstructuredClient,
-        input_file: str,
-        job_template_id: Optional[str] = None, 
-        job_nodes: Optional[list[dict[str, object]]] = None
-) -> tuple[str, list[dict[str, str]]]:
-    """Runs an Unstructured on-demand job.
+class UnstructuredIO:
+    def __init__(self,
+        api_key: str,
+    ):
+        self.api_key = api_key
+        self.client = UnstructuredClient(api_key_auth=self.api_key)
 
-    Arguments:
-    - client {UnstructuredClient}: The initialized Unstructured API client to use.
-    - input_file {str}: Path to the input file to process.
-    - job_template_id: {Optional[str]}: If this job is to use a workflow template, the ID of the workflow template to use.
-    - job_nodes {Optional[list[dict[str, object]]]}: If this job is to use a custom workflow definition, the list of custom workflow nodes to use.
+    def run_on_demand_job(
+            self,
+            input_file: str,
+            job_template_id: Optional[str] = None, 
+            job_nodes: Optional[list[dict[str, object]]] = None
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Runs an Unstructured on-demand job."""
+        if not os.path.isfile(input_file):
+            raise ValueError(f"Input path is not a file or does not exist: {input_file}")
 
-    Raises:
-    - ValueError: If neither the job template ID nor job nodes (and not both) are specified.
-    - ValueError: If the input file does not exist or is not a file.
-        
-    Returns:
-    - job_id {str}: The ID of the on-demand job.
-    - job_input_file_ids {list[str]}: The input file IDs of the on-demand job.
-    - job_output_node_files {list[dict[str, str]]}: The output node files of the on-demand job.
-    """
-    if not os.path.isfile(input_file):
-        raise ValueError(f"Input path is not a file or does not exist: {input_file}")
-
-    request_data = {}
-    filename = os.path.basename(input_file)
-    files = [
-        (
-            InputFiles(
-                content=open(input_file, "rb"),
-                file_name=filename,
-                content_type="application/pdf"
+        request_data = {}
+        filename = os.path.basename(input_file)
+        files = [
+            (
+                InputFiles(
+                    content=open(input_file, "rb"),
+                    file_name=filename,
+                    content_type="application/pdf"
+                )
             )
-        )
-    ]
+        ]
 
-    if job_template_id is not None:
-        request_data = json.dumps({"template_id": job_template_id})
-    elif job_nodes is not None:
-        request_data = json.dumps({"job_nodes": job_nodes})
-    else:
-        raise ValueError(f"Must specify a job template ID or job nodes (but not both).")
-        exit(1)
-
-    response = client.jobs.create_job(
-        request=CreateJobRequest(
-            body_create_job=BodyCreateJob(
-                request_data=request_data,
-                input_files=files
-            )
-        )
-    )
-
-    job_id = response.job_information.id
-    job_input_file_ids = response.job_information.input_file_ids
-    job_output_node_files = response.job_information.output_node_files
-
-    return job_id, job_input_file_ids, job_output_node_files
-
-
-def get_job_status(client: UnstructuredClient, job_id: str) -> dict:
-    """Returns the current status of a job (one API call).
-
-    Arguments:
-    - client {UnstructuredClient}: The initialized Unstructured API client to use.
-    - job_id {str}: The job ID to check.
-
-    Returns:
-    - dict: Serializable job info with at least 'status', 'id', 'input_file_ids'.
-    """
-    response = client.jobs.get_job(request={"job_id": job_id})
-    job = response.job_information
-    return job.model_dump(mode="json")
-
-
-def poll_for_job_status(client: UnstructuredClient, job_id: str) -> JobInformation:
-    """Keeps checking a job's status until the job is completed.
-
-    Arguments:
-    - client {UnstructuredClient}: The initialized Unstructured API client to use.
-    - job_id {str}: The job ID to check the status of.
-
-    Returns:
-    - job {JobInformation}: Information about the Unstructured job.
-    """
-    while True:
-        response = client.jobs.get_job(
-            request={
-                "job_id": job_id
-            }
-        )
-
-        job = response.job_information
-
-        if job.status == "SCHEDULED":
-            print("Job is scheduled, polling again in 10 seconds...")
-            time.sleep(10)
-        elif job.status == "IN_PROGRESS":
-            print("Job is in progress, polling again in 10 seconds...")
-            time.sleep(10)
+        if job_template_id is not None:
+            request_data = json.dumps({"template_id": job_template_id})
+        elif job_nodes is not None:
+            request_data = json.dumps({"job_nodes": job_nodes})
         else:
-            print("Job is completed.")
-            break
+            raise ValueError(f"Must specify a job template ID or job nodes (but not both).")
+            exit(1)
 
-    return job
-
-
-def download_job_output(
-        client: UnstructuredClient,
-        job_id: str,
-        job_input_file_ids: list[str],
-        output_dir: str
-) -> None:
-    """Downloads the output of an Unstructured job.
-
-    Arguments:
-    - client {UnstructuredClient}: The initialized Unstructured API client to use.
-    - job_id {str}: The job ID to download the output from.
-    - job_input_file_ids {list[str]}: The input file IDs of the job.
-    - output_dir {str}: The directory to download the output into.
-    """
-    for job_input_file_id in job_input_file_ids:
-        print(f"Attempting to get processed results from file_id '{job_input_file_id}'...")
-
-        response = client.jobs.download_job_output(
-            request=DownloadJobOutputRequest(
-                job_id=job_id,
-                file_id=job_input_file_id
+        response = self.client.jobs.create_job(
+            request=CreateJobRequest(
+                body_create_job=BodyCreateJob(
+                    request_data=request_data,
+                    input_files=files
+                )
             )
         )
 
-        # print(response.any) will give final JSON 
+        job_id = response.job_information.id
+        job_input_file_ids = response.job_information.input_file_ids
+        job_output_node_files = response.job_information.output_node_files
 
-        output_path = os.path.join(output_dir, f"{job_input_file_id}.json")
-        print(f"Output path: {output_path}")
+        return job_id, job_input_file_ids, job_output_node_files
 
-        with open(output_path, "w") as f:
-            json.dump(response.any, f, indent=4)
 
-        print(f"Saved output for file_id '{job_input_file_id}' to '{output_path}'.\n")
+    def get_job_status(self, job_id: str) -> dict:
+        """Returns the current status of a job (one API call)."""
+        response = self.client.jobs.get_job(request={"job_id": job_id})
+        job = response.job_information
+        return job.model_dump(mode="json")
+
+
+    def poll_for_job_status(self, job_id: str) -> JobInformation:
+        """Keeps checking a job's status until the job is completed."""
+        while True:
+            response = self.client.jobs.get_job(
+                request={
+                    "job_id": job_id
+                }
+            )
+
+            job = response.job_information
+
+            if job.status == "SCHEDULED":
+                print("Job is scheduled, polling again in 10 seconds...")
+                time.sleep(10)
+            elif job.status == "IN_PROGRESS":
+                print("Job is in progress, polling again in 10 seconds...")
+                time.sleep(10)
+            else:
+                print("Job is completed.")
+                break
+
+        return job
+
+
+    def download_job_output(
+            self,
+            job_id: str,
+            job_input_file_ids: list[str],
+            output_dir: str
+    ) -> None:
+        """Downloads the output of an Unstructured job"""
+        for job_input_file_id in job_input_file_ids:
+            print(f"Attempting to get processed results from file_id '{job_input_file_id}'...")
+
+            response = self.client.jobs.download_job_output(
+                request=DownloadJobOutputRequest(
+                    job_id=job_id,
+                    file_id=job_input_file_id
+                )
+            )
+
+            # print(response.any) will give final JSON 
+
+            output_path = os.path.join(output_dir, f"{job_input_file_id}.json")
+            print(f"Output path: {output_path}")
+
+            with open(output_path, "w") as f:
+                json.dump(response.any, f, indent=4)
+
+            print(f"Saved output for file_id '{job_input_file_id}' to '{output_path}'.\n")
 
 
 def main():
@@ -184,45 +152,47 @@ def main():
     job_input_file_ids = []
     job_output_node_files = []
 
-    with UnstructuredClient(api_key_auth=UNSTRUCTURED_API_KEY) as client:
-        print("-" * 80)
-        print(f"Attempting to run the on-demand job on input file '{INPUT_FILE_PATH}'...")
-        job_id, job_input_file_ids, job_output_node_files = run_on_demand_job(
-            client=client,
-            input_file=INPUT_FILE_PATH,
-            job_template_id=job_template_id
-        )
+    unstructured = UnstructuredIO(
+        api_key=UNSTRUCTURED_API_KEY
+    )
 
-        print(f"Job ID: {job_id}\n")
-        print("Input file details:\n")
+    print("-" * 80)
+    print(f"Attempting to run the on-demand job on input file '{INPUT_FILE_PATH}'...")
+    job_id, job_input_file_ids, job_output_node_files = unstructured.run_on_demand_job(
+        input_file=INPUT_FILE_PATH,
+        job_template_id=job_template_id
+    )
 
-        for job_input_file_id in job_input_file_ids:
-            print(job_input_file_id)
+    print(f"Job ID: {job_id}\n")
+    print("Input file details:\n")
 
-        print("\nOutput node file details:\n")
+    for job_input_file_id in job_input_file_ids:
+        print(job_input_file_id)
 
-        for output_node_file in job_output_node_files:
-            print(output_node_file)
+    print("\nOutput node file details:\n")
 
-        print("-" * 80)
-        print("Polling for job status...")
+    for output_node_file in job_output_node_files:
+        print(output_node_file)
 
-        job = poll_for_job_status(client, job_id)
-        
-        print(f"Job details:\n---\n{job.model_dump_json(indent=4)}")
+    print("-" * 80)
+    print("Polling for job status...")
+
+    job = unstructured.poll_for_job_status(job_id=job_id)
     
-        if job.status != "COMPLETED":
-            print("Job did not complete successfully. Stopping this script without downloading any output.")
-            exit(1)
+    print(f"Job details:\n---\n{job.model_dump_json(indent=4)}")
 
-        print("-" * 80)
-        print("Attempting to download the job output...")
-        os.makedirs(OUTPUT_FOLDER_PATH, exist_ok=True)
-        download_job_output(client, job_id, job_input_file_ids, OUTPUT_FOLDER_PATH)
-        
-        print("-" * 80)
-        print(f"Script completed. Check the output folder '{OUTPUT_FOLDER_PATH}' for the results.")
-        exit(0)
+    if job.status != "COMPLETED":
+        print("Job did not complete successfully. Stopping this script without downloading any output.")
+        exit(1)
+
+    print("-" * 80)
+    print("Attempting to download the job output...")
+    os.makedirs(OUTPUT_FOLDER_PATH, exist_ok=True)
+    unstructured.download_job_output(job_id=job_id, job_input_file_ids=job_input_file_ids, output_dir=OUTPUT_FOLDER_PATH)
+    
+    print("-" * 80)
+    print(f"Script completed. Check the output folder '{OUTPUT_FOLDER_PATH}' for the results.")
+    exit(0)
 
 
 if __name__ == "__main__":
